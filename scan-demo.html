@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Intake Scanner — Demo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#101418;
+    --panel:#1a2129;
+    --panel-2:#232c36;
+    --line:#33404d;
+    --text:#e8edf2;
+    --dim:#8b98a5;
+    --pass:#39d98a;
+    --fail:#ff5c5c;
+    --amber:#ffc247;
+    --accent:#4db8ff;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{
+    background:var(--ink);
+    color:var(--text);
+    font-family:-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+    min-height:100vh;
+    display:flex;flex-direction:column;
+  }
+  header{
+    padding:14px 16px 10px;
+    display:flex;align-items:baseline;justify-content:space-between;
+    border-bottom:1px solid var(--line);
+  }
+  header h1{font-size:1.05rem;font-weight:600;letter-spacing:.02em}
+  header .tag{font-size:.7rem;color:var(--dim);text-transform:uppercase;letter-spacing:.14em}
+
+  /* ---- Scanner viewport ---- */
+  #scanWrap{position:relative;background:#000}
+  #reader{width:100%;}
+  #reader video{width:100%!important;display:block}
+  #scanIdle{
+    aspect-ratio:4/3;display:flex;flex-direction:column;gap:14px;
+    align-items:center;justify-content:center;color:var(--dim);
+    background:
+      radial-gradient(ellipse at center, #16202a 0%, #0b0f13 75%);
+  }
+  #scanIdle p{font-size:.85rem;max-width:26ch;text-align:center;line-height:1.5}
+  .btn{
+    appearance:none;border:1px solid var(--line);border-radius:10px;
+    background:var(--panel-2);color:var(--text);
+    font-size:.95rem;font-weight:600;padding:12px 22px;cursor:pointer;
+  }
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04121e}
+  .btn.small{padding:8px 14px;font-size:.8rem;font-weight:500}
+
+  /* status strip — the live pass/fail readout */
+  #statusStrip{
+    min-height:56px;padding:10px 16px;
+    display:flex;align-items:center;gap:12px;
+    background:var(--panel);
+    border-top:3px solid var(--line);
+    transition:border-color .15s ease, background .15s ease;
+    font-variant-numeric:tabular-nums;
+  }
+  #statusStrip.pass{border-top-color:var(--pass)}
+  #statusStrip.fail{border-top-color:var(--fail)}
+  #statusStrip.dup{border-top-color:var(--amber)}
+  #statusStrip .light{
+    width:12px;height:12px;border-radius:50%;flex:0 0 auto;
+    background:var(--line);
+  }
+  #statusStrip.pass .light{background:var(--pass);box-shadow:0 0 10px var(--pass)}
+  #statusStrip.fail .light{background:var(--fail);box-shadow:0 0 10px var(--fail)}
+  #statusStrip.dup .light{background:var(--amber);box-shadow:0 0 10px var(--amber)}
+  #statusMain{font-size:.9rem;font-weight:600;line-height:1.25}
+  #statusSub{font-size:.75rem;color:var(--dim);line-height:1.3}
+
+  /* expecting bar */
+  #expectRow{
+    display:flex;gap:6px;padding:10px 16px 4px;overflow-x:auto;
+  }
+  .chip{
+    font-size:.72rem;letter-spacing:.05em;
+    padding:6px 10px;border-radius:999px;
+    border:1px solid var(--line);color:var(--dim);
+    white-space:nowrap;flex:0 0 auto;
+  }
+  .chip.now{border-color:var(--accent);color:var(--accent);font-weight:600}
+  .chip.done{border-color:var(--pass);color:var(--pass)}
+
+  /* manual entry for desktop testing */
+  #manualRow{display:flex;gap:8px;padding:10px 16px}
+  #manualRow input{
+    flex:1;background:var(--panel-2);border:1px solid var(--line);
+    border-radius:10px;color:var(--text);padding:11px 12px;font-size:16px;
+  }
+  #manualRow input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* ---- table ---- */
+  main{flex:1;padding:8px 10px 90px;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:.78rem;min-width:560px}
+  thead th{
+    text-align:left;color:var(--dim);font-weight:500;
+    font-size:.66rem;text-transform:uppercase;letter-spacing:.12em;
+    padding:8px 8px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--ink);
+  }
+  tbody td{
+    padding:9px 8px;border-bottom:1px solid #202a34;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    white-space:nowrap;
+  }
+  tbody td.empty{color:#3d4a57}
+  tbody tr.active td{background:rgba(77,184,255,.06)}
+  td .ok{color:var(--pass);margin-right:5px}
+  .rownum{color:var(--dim);font-family:inherit!important}
+
+  footer{
+    position:fixed;left:0;right:0;bottom:0;
+    display:flex;gap:10px;padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(to top, var(--ink) 70%, transparent);
+  }
+  footer .btn{flex:1}
+
+  @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+
+  /* ---- PO dialog ---- */
+  #poOverlay{
+    position:fixed;inset:0;background:rgba(6,10,14,.72);
+    display:none;align-items:center;justify-content:center;padding:20px;z-index:50;
+  }
+  #poOverlay.show{display:flex}
+  #poBox{
+    width:100%;max-width:360px;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:20px;
+  }
+  #poBox h2{font-size:1rem;margin-bottom:6px}
+  #poBox p{font-size:.8rem;color:var(--dim);line-height:1.45;margin-bottom:14px}
+  #poBox input{
+    width:100%;background:var(--panel-2);border:1px solid var(--line);
+    border-radius:10px;color:var(--text);padding:12px;font-size:16px;
+    font-family:"SF Mono",ui-monospace,Menlo,monospace;
+  }
+  #poBox input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  #poBox .row{display:flex;gap:10px;margin-top:14px}
+  #poBox .row .btn{flex:1}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Intake Scanner</h1>
+  <span class="tag">Demo build</span>
+</header>
+
+<div id="scanWrap">
+  <div id="reader" hidden></div>
+  <div id="scanIdle">
+    <p>Point the camera at the barcodes on the box. Each code is validated live and sorted into the sheet.</p>
+    <button class="btn primary" id="startBtn">Start camera</button>
+  </div>
+</div>
+
+<div id="statusStrip">
+  <div class="light"></div>
+  <div>
+    <div id="statusMain">Ready</div>
+    <div id="statusSub">Sweep the camera across the barcodes — each sorts into its column</div>
+  </div>
+</div>
+
+<div id="expectRow" aria-label="Scan order"></div>
+
+<div id="manualRow">
+  <input id="manualInput" placeholder="No scanner? Type a code to simulate" autocomplete="off">
+  <button class="btn small" id="manualBtn">Enter</button>
+</div>
+
+<main>
+  <table aria-label="Scanned intake rows">
+    <thead>
+      <tr>
+        <th>#</th><th>Order Name</th><th>Asset Tag</th><th>Serial</th><th>Computer</th><th>PO (manual)</th><th>Received</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</main>
+
+<div id="poOverlay" role="dialog" aria-modal="true" aria-labelledby="poTitle">
+  <div id="poBox">
+    <h2 id="poTitle">PO Number</h2>
+    <p>Enter the PO # for this batch. It goes into the PO Number column (E) for every row in the export.</p>
+    <input id="poInput" placeholder="e.g. PO-2026-0147" autocomplete="off">
+    <div class="row">
+      <button class="btn" id="poCancel">Cancel</button>
+      <button class="btn primary" id="poConfirm">Export</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <button class="btn" id="undoBtn">Undo last</button>
+  <button class="btn" id="resetBtn">Reset demo</button>
+  <button class="btn primary" id="exportBtn">Export to Excel</button>
+</footer>
+
+<script>
+/* ------------------------------------------------------------------
+   Sweep mode: each detected code is auto-classified into its column.
+   Rules mirror the Excel VBA:
+   Asset Tag : two capitals + dash        (^[A-Z][A-Z]-)
+   Serial    : exactly 8 chars, no dash
+   Computer  : exactly 10 chars, no space
+   Order     : contains a space between two chunks (^\S+ \S+)
+   Date      : auto-stamped when the row completes (PO/E is manual)
+   Checked in that priority order so overlaps resolve predictably.
+-------------------------------------------------------------------*/
+const FIELDS = [
+  { key:'asset',    label:'Asset Tag',
+    test: v => /^[A-Z][A-Z]-/.test(v) },
+  { key:'serial',   label:'Serial',
+    test: v => v.length === 8 && !v.includes('-') && !v.includes(' ') },
+  { key:'computer', label:'Computer',
+    test: v => v.length === 10 && !v.includes(' ') && !/^[A-Z][A-Z]-/.test(v) },
+  { key:'order',    label:'Order Name',
+    test: v => /^\S+ \S+/.test(v) },
+];
+const DISPLAY_ORDER = ['order','asset','serial','computer']; // table/chip order
+
+let rows = [];          // completed rows
+let cur  = newRow();    // row being filled (any order)
+let scanner = null;
+let recent = new Map(); // debounce: code -> last seen time
+
+function newRow(){ return { order:'', asset:'', serial:'', computer:'', po:'', date:'' }; }
+
+/* ---------- classification + routing ---------- */
+function handleCode(raw){
+  const value = raw.trim();
+  if(!value) return;
+
+  // debounce: ignore any code seen in the last 3 seconds
+  const now = Date.now();
+  if(recent.has(value) && now - recent.get(value) < 3000) return;
+  recent.set(value, now);
+
+  // duplicate check across everything stored (matches CountIf over A:D)
+  const all = [];
+  rows.forEach(r => DISPLAY_ORDER.forEach(k => r[k] && all.push(r[k])));
+  DISPLAY_ORDER.forEach(k => cur[k] && all.push(cur[k]));
+  if(all.includes(value)){
+    setStatus('dup', 'Duplicate — not added', `"${shorten(value)}" already exists.`);
+    buzz(2); return;
+  }
+
+  // classify: first rule that matches wins
+  const f = FIELDS.find(x => x.test(value));
+  if(!f){
+    setStatus('fail', 'Rejected — no match', `"${shorten(value)}" doesn't fit any field's format.`);
+    buzz(2); return;
+  }
+  if(cur[f.key]){
+    setStatus('fail', `${f.label} already filled`, `Got another ${f.label} ("${shorten(value)}") before the row finished.`);
+    buzz(2); return;
+  }
+
+  cur[f.key] = value;
+  const missing = DISPLAY_ORDER.filter(k => !cur[k]);
+
+  if(missing.length === 0){
+    cur.date = new Date().toLocaleDateString();
+    rows.push(cur);
+    setStatus('pass', `Row ${rows.length} complete — date stamped`, 'Sweep the next box to start a new row.');
+    cur = newRow();
+    buzz(1);
+  } else {
+    const names = missing.map(k => FIELDS.find(f=>f.key===k).label).join(', ');
+    setStatus('pass', `${f.label} captured`, `Still needed: ${names}`);
+    buzz(1);
+  }
+  render();
+}
+
+function shorten(s){ return s.length > 24 ? s.slice(0,24)+'…' : s; }
+
+/* ---------- UI ---------- */
+const strip = document.getElementById('statusStrip');
+const sMain = document.getElementById('statusMain');
+const sSub  = document.getElementById('statusSub');
+
+function setStatus(kind, main, sub){
+  strip.className = kind || '';
+  sMain.textContent = main;
+  sSub.textContent  = sub || '';
+  render();
+}
+
+function render(){
+  // chips: captured vs still needed (any order)
+  const er = document.getElementById('expectRow');
+  er.innerHTML = '';
+  DISPLAY_ORDER.forEach(k=>{
+    const f = FIELDS.find(x=>x.key===k);
+    const c = document.createElement('span');
+    const done = !!cur[k];
+    c.className = 'chip' + (done ? ' done' : ' now');
+    c.textContent = (done ? '✓ ' : '') + f.label;
+    er.appendChild(c);
+  });
+
+  // table
+  const tb = document.getElementById('tbody');
+  tb.innerHTML = '';
+  const view = [...rows];
+  const curHasData = DISPLAY_ORDER.some(k => cur[k]);
+  if(curHasData) view.push(cur);
+
+  if(view.length === 0){
+    tb.innerHTML = '<tr><td colspan="7" class="empty" style="padding:22px 8px">No rows yet — sweep the camera across the barcodes on a box.</td></tr>';
+    return;
+  }
+  view.forEach((r,i)=>{
+    const tr = document.createElement('tr');
+    const isCur = curHasData && r === cur;
+    if(isCur) tr.className = 'active';
+    tr.innerHTML =
+      `<td class="rownum">${i+1}</td>` +
+      DISPLAY_ORDER.map(k => r[k]
+        ? `<td><span class="ok">✓</span>${esc(r[k])}</td>`
+        : `<td class="empty">—</td>`).join('') +
+      `<td class="empty">${r.po ? esc(r.po) : 'manual'}</td>` +
+      `<td>${r.date ? esc(r.date) : '<span class="empty">—</span>'}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function buzz(times){
+  if(navigator.vibrate) navigator.vibrate(times === 1 ? 40 : [60,50,60]);
+}
+
+/* ---------- camera ---------- */
+document.getElementById('startBtn').addEventListener('click', async ()=>{
+  const idle = document.getElementById('scanIdle');
+  const readerEl = document.getElementById('reader');
+  try{
+    readerEl.hidden = false;
+    scanner = new Html5Qrcode('reader', {
+      // prioritize slim 1D barcode formats + QR
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODE_93,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.ITF,
+        Html5QrcodeSupportedFormats.CODABAR,
+        Html5QrcodeSupportedFormats.QR_CODE
+      ],
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      verbose: false
+    });
+    await scanner.start(
+      { facingMode: 'environment' },
+      {
+        fps: 15,
+        // wide, short letterbox — matches slim 1D barcodes
+        qrbox: (w,h)=>({ width: Math.floor(w*0.92), height: Math.max(100, Math.floor(h*0.28)) }),
+        // ask the camera for high resolution so narrow bars resolve
+        videoConstraints: {
+          facingMode: 'environment',
+          width:  { ideal: 1920 },
+          height: { ideal: 1080 },
+          focusMode: 'continuous'
+        }
+      },
+      (text)=>{ handleCode(text); },
+      ()=>{} // per-frame miss: ignore
+    );
+    idle.style.display = 'none';
+    setStatus('', 'Camera on', 'Sweep across the barcodes — codes sort themselves into columns');
+  }catch(err){
+    readerEl.hidden = true;
+    setStatus('fail', 'Camera unavailable', 'Open over HTTPS and allow camera access, or use the manual box below.');
+  }
+});
+
+/* ---------- manual entry ---------- */
+const mi = document.getElementById('manualInput');
+document.getElementById('manualBtn').addEventListener('click', ()=>{ handleCode(mi.value); mi.value=''; mi.focus(); });
+mi.addEventListener('keydown', e=>{ if(e.key==='Enter'){ handleCode(mi.value); mi.value=''; } });
+
+/* ---------- undo / reset ---------- */
+let fillHistory = []; // track fill order for undo
+const origHandle = handleCode;
+handleCode = function(raw){
+  const before = {...cur}, beforeRows = rows.length;
+  origHandle(raw);
+  // record what changed
+  if(rows.length > beforeRows){
+    fillHistory.push({type:'row'});
+  } else {
+    for(const k of DISPLAY_ORDER){
+      if(cur[k] && !before[k]){ fillHistory.push({type:'field', key:k}); break; }
+    }
+  }
+};
+
+document.getElementById('undoBtn').addEventListener('click', ()=>{
+  const last = fillHistory.pop();
+  if(!last){ setStatus('', 'Nothing to undo', ''); return; }
+  if(last.type === 'row'){
+    cur = rows.pop(); cur.date = '';
+    // remove the most recently useful field so it can be rescanned
+    const k = DISPLAY_ORDER.slice().reverse().find(k => cur[k]);
+    if(k){ recent.delete(cur[k]); cur[k] = ''; }
+    setStatus('', 'Reopened last row', 'Rescan the removed barcode.');
+  } else {
+    recent.delete(cur[last.key]);
+    cur[last.key] = '';
+    setStatus('', 'Last capture removed', `Rescan ${FIELDS.find(f=>f.key===last.key).label}.`);
+  }
+  render();
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  rows = []; cur = newRow(); fillHistory = []; recent.clear();
+  setStatus('', 'Demo reset', 'Sweep the camera across a box to begin.');
+});
+
+/* ---------- export to Excel (asks for PO#, fills column E, same A–F layout) ---------- */
+const poOverlay = document.getElementById('poOverlay');
+const poInput   = document.getElementById('poInput');
+
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  if(rows.length === 0){
+    setStatus('fail', 'Nothing to export', 'Complete at least one row first.');
+    return;
+  }
+  poInput.value = '';
+  poOverlay.classList.add('show');
+  setTimeout(()=> poInput.focus(), 50);
+});
+
+document.getElementById('poCancel').addEventListener('click', ()=>{
+  poOverlay.classList.remove('show');
+});
+
+poInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doExport(); });
+document.getElementById('poConfirm').addEventListener('click', doExport);
+
+function doExport(){
+  const po = poInput.value.trim();
+  if(!po){
+    poInput.focus();
+    poInput.placeholder = 'PO # is required to export';
+    return;
+  }
+  rows.forEach(r => r.po = po);   // fill PO Number (column E) on every row
+  poOverlay.classList.remove('show');
+
+  const data = [
+    ['Order Name','Asset Tag','Serial Number','Computer Name','PO Number','Date Received']
+  ];
+  rows.forEach(r => data.push([r.order, r.asset, r.serial, r.computer, r.po, r.date]));
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [ {wch:22},{wch:14},{wch:14},{wch:16},{wch:12},{wch:14} ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Intake');
+
+  const stamp = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `intake-scan-${stamp}.xlsx`);
+  setStatus('pass', `Exported ${rows.length} row${rows.length>1?'s':''} · PO ${po}`, 'File saved as .xlsx — open it in Excel.');
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
